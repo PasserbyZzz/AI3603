@@ -1,0 +1,5 @@
+HeapDict==1.0.1
+matplotlib==3.7.2
+numpy==1.24.3
+numpy==1.24.4
+scipy==1.16.2
