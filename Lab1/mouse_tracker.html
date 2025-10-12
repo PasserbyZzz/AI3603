@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A*算法鼠标追踪器</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #fff;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>A*算法鼠标追踪器</h1>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="info">
+        <p id="mousePos">鼠标位置: (0, 0)</p>
+        <p id="trackerPos">追踪器位置: (0, 0)</p>
+        <p id="pathInfo">路径长度: 0</p>
+    </div>
+
+    <script>
+        // 获取Canvas元素和上下文
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 获取信息显示元素
+        const mousePosElement = document.getElementById('mousePos');
+        const trackerPosElement = document.getElementById('trackerPos');
+        const pathInfoElement = document.getElementById('pathInfo');
+        
+        // 地图配置
+        const TILE_SIZE = 20; // 每个格子的大小
+        const MAP_WIDTH = canvas.width / TILE_SIZE;
+        const MAP_HEIGHT = canvas.height / TILE_SIZE;
+        
+        // 颜色定义
+        const COLORS = {
+            WALL: '#333333',
+            EMPTY: '#ffffff',
+            START: '#00ff00',
+            END: '#ff0000',
+            PATH: '#0000ff',
+            GRID: '#dddddd'
+        };
+        
+        // 初始化地图、追踪器位置和鼠标位置
+        let map = [];
+        let trackerPos = { x: 0, y: 0 };
+        let mousePos = { x: 0, y: 0 };
+        let path = [];
+        
+        // 初始化地图 - 随机生成障碍物
+        function initMap() {
+            map = [];
+            for (let y = 0; y < MAP_HEIGHT; y++) {
+                map[y] = [];
+                for (let x = 0; x < MAP_WIDTH; x++) {
+                    // 20%的概率生成障碍物
+                    map[y][x] = Math.random() < 0.2 ? 1 : 0;
+                }
+            }
+            
+            // 确保追踪器初始位置和鼠标位置是空地
+            trackerPos = { 
+                x: Math.floor(Math.random() * MAP_WIDTH), 
+                y: Math.floor(Math.random() * MAP_HEIGHT) 
+            };
+            map[trackerPos.y][trackerPos.x] = 0;
+            
+            // 生成一个有效的鼠标目标位置（非障碍物）
+            do {
+                mousePos = { 
+                    x: Math.floor(Math.random() * MAP_WIDTH), 
+                    y: Math.floor(Math.random() * MAP_HEIGHT) 
+                };
+            } while (map[mousePos.y][mousePos.x] === 1 || 
+                     (mousePos.x === trackerPos.x && mousePos.y === trackerPos.y));
+        }
+        
+        // 绘制地图
+        function drawMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制网格
+            for (let y = 0; y < MAP_HEIGHT; y++) {
+                for (let x = 0; x < MAP_WIDTH; x++) {
+                    // 绘制格子
+                    ctx.fillStyle = map[y][x] === 1 ? COLORS.WALL : COLORS.EMPTY;
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    
+                    // 绘制网格线
+                    ctx.strokeStyle = COLORS.GRID;
+                    ctx.strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+            
+            // 绘制路径
+            path.forEach(point => {
+                ctx.fillStyle = COLORS.PATH;
+                ctx.fillRect(point.x * TILE_SIZE + 4, point.y * TILE_SIZE + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+            });
+            
+            // 绘制追踪器
+            ctx.fillStyle = COLORS.START;
+            ctx.fillRect(trackerPos.x * TILE_SIZE, trackerPos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            
+            // 绘制鼠标位置
+            ctx.fillStyle = COLORS.END;
+            ctx.fillRect(mousePos.x * TILE_SIZE, mousePos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            
+            // 更新信息显示
+            mousePosElement.textContent = `鼠标位置: (${mousePos.x}, ${mousePos.y})`;
+            trackerPosElement.textContent = `追踪器位置: (${trackerPos.x}, ${trackerPos.y})`;
+            pathInfoElement.textContent = `路径长度: ${path.length}`;
+        }
+        
+        // Node类表示A*算法中的节点
+        class Node {
+            constructor(x, y, parent = null) {
+                this.x = x;
+                this.y = y;
+                this.parent = parent;
+                this.g = 0; // 从起点到当前节点的成本 g
+                this.h = 0; // 从当前节点到目标节点的估计成本（曼哈顿距离）h
+                this.f = 0; // 总成本 f = g + h
+            }
+            
+            // 比较节点是否相同（位置相同）
+            equals(other) {
+                return this.x === other.x && this.y === other.y;
+            }
+            
+            // 计算到目标节点的曼哈顿距离
+            calculateHeuristic(target) {
+                this.h = Math.abs(this.x - target.x) + Math.abs(this.y - target.y);
+            }
+        }
+        
+        // A*算法实现
+        function findPath(start, end) {
+            // 初始化开放列表和关闭列表
+            const openList = []; // 待探索的节点列表
+            const closedList = []; // 已探索过的节点列表
+            
+            // 将起始节点添加到开放列表
+            const startNode = new Node(start.x, start.y);
+            const endNode = new Node(end.x, end.y);
+
+            // 计算起始节点的启发值并加入开放列表
+            startNode.calculateHeuristic(endNode);
+            openList.push(startNode);
+            
+            // 主循环：当开放列表不为空时继续搜索
+            while (openList.length > 0) {
+                // 找到开放列表中f值最小的节点
+                let lowestIndex = 0;
+                for (let i = 0; i < openList.length; i++) {
+                    if (openList[i].f < openList[lowestIndex].f) {
+                        lowestIndex = i;
+                    }
+                }
+                
+                // 选择f值最小的节点
+                const currentNode = openList[lowestIndex];
+                
+                // 2. 检查是否到达目标节点
+                
+                if (currentNode.equals(endNode)) {
+                    // 如果找到目标，回溯路径
+                    let path = [];
+                    let current = currentNode;
+                    while (current !== null) {
+                        path.push({ x: current.x, y: current.y });
+                        current = current.parent;
+                    }
+                    return path.reverse(); // 反转路径，从起点到终点
+                }
+                
+                // 3. 将当前节点从开放列表移到关闭列表
+                openList.splice(lowestIndex, 1);
+                closedList.push(currentNode);
+                
+                // 4. 找到所有相邻节点（上、下、左、右）
+                const neighbors = [];
+                const directions = [
+                    { x: 0, y: -1 }, // 上
+                    { x: 0, y: 1 },  // 下
+                    { x: -1, y: 0 }, // 左
+                    { x: 1, y: 0 }   // 右
+                ];
+                
+                for (const dir of directions) {
+                    const newX = currentNode.x + dir.x;
+                    const newY = currentNode.y + dir.y;
+                    
+                    // 检查节点是否在地图范围内
+                    if (newX >= 0 && newX < MAP_WIDTH && newY >= 0 && newY < MAP_HEIGHT) {
+                        // 检查节点是否可通过（不是障碍物）
+                        if (map[newY][newX] === 0) {
+                            neighbors.push(new Node(newX, newY));
+                        }
+                    }
+                }
+                
+                // 5. 处理所有相邻节点
+                for (const neighbor of neighbors) {
+                    // 检查邻居是否在关闭列表中
+                    let isInClosedList = false;
+                    for (const closedNode of closedList) {
+                        if (neighbor.equals(closedNode)) {
+                            isInClosedList = true;
+                            break;
+                        }
+                    }
+
+                    // 跳过已探索的节点
+                    if (isInClosedList) continue;
+                    
+                    // 计算从起点经过当前节点到邻居的成本
+                    neighbor.g = currentNode.g + 1; // 每个移动的成本为1
+                    neighbor.calculateHeuristic(endNode); // 计算启发值
+                    neighbor.f = neighbor.g + neighbor.h; // 计算总成本
+                    neighbor.parent = currentNode; // 设置父节点为当前节点
+                    
+                    // 检查邻居是否已经在开放列表中，并且是否有更好的路径
+                    let isInOpenList = false;
+                    for (const openNode of openList) {
+                        if (neighbor.equals(openNode)) {
+                            isInOpenList = true;
+                            if (neighbor.g > openNode.g) {
+                                // 已经有更好的路径，跳过这个邻居
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // 如果邻居节点不在开放列表中，则添加进去
+                    if (!isInOpenList) {
+                        openList.push(neighbor);
+                    }
+                }
+            }
+            
+            // 没有找到路径
+            return [];
+        }
+        
+        // 鼠标移动事件处理
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / TILE_SIZE);
+            const y = Math.floor((e.clientY - rect.top) / TILE_SIZE);
+            
+            // 确保鼠标位置在地图范围内
+            if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT && map[y][x] === 0) {
+                mousePos = { x, y };
+                
+                // 使用A*算法计算新路径
+                path = findPath(trackerPos, mousePos);
+                
+                // 更新显示
+                drawMap();
+            }
+        });
+        
+        // 追踪器移动函数
+        function moveTracker() {
+            if (path.length > 1) {
+                // 移动追踪器到路径的下一个点
+                trackerPos = path[1];
+                
+                // 重新计算从新位置到鼠标位置的路径
+                path = findPath(trackerPos, mousePos);
+                
+                // 更新显示
+                drawMap();
+            }
+        }
+        
+        // 按空格键重新生成地图
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                initMap();
+                path = findPath(trackerPos, mousePos);
+                drawMap();
+            }
+        });
+        
+        // 初始化游戏
+        function init() {
+            initMap();
+            path = findPath(trackerPos, mousePos);
+            drawMap();
+            
+            // 设置追踪器移动间隔（每200毫秒移动一次）
+            setInterval(moveTracker, 200);
+        }
+        
+        // 启动游戏
+        init();
+    </script>
+</body>
+</html>
