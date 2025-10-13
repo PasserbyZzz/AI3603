@@ -1,0 +1,67 @@
+% Task 2 Report Section: Improved A* (English)
+\section{Task 2: Improved A* with 8-Connectivity, Obstacle-Aware and Turning Costs}
+
+\subsection{Method}
+We extend the baseline A* to incorporate three practical considerations: (i) 8-connected motion (diagonals allowed), (ii) safety awareness via obstacle distance, and (iii) path smoothness via steering (turning) costs. The open set is implemented with \texttt{heapdict} to support efficient priority updates; we use an octile-distance heuristic that matches the 8-connected motion model.
+
+Concretely, the planner:
+\begin{itemize}
+	\item Allows moves in 8 directions: up, down, left, right, and the four diagonals; the step cost is 1 for axis-aligned moves and $\sqrt{2}$ for diagonals.
+	\item Uses an Euclidean Distance Transform (EDT) to compute the distance $d(s)$ from each free cell $s$ to the nearest obstacle; we add a safety cost that grows when $d(s)$ is small.
+	\item Adds a small turning cost whenever the motion direction changes between two consecutive steps, encouraging smoother paths with fewer sharp turns.
+	\item Keeps the heuristic purely geometric (octile distance), excluding the extra safety/smoothness costs from $h$ to preserve admissibility and consistency.
+\end{itemize}
+
+\subsection{Problem Formulation}
+Let the grid map be $\texttt{world\_map}\in\{0,1\}^{120\times 120}$, where 0 indicates a free cell and 1 an obstacle. The state space is
+\[
+\mathcal{S}=\{(x,y)\in\mathbb{Z}^2\mid 0\le x<120,\,0\le y<120,\, \texttt{world\_map}[x][y]=0\}.
+\]
+The 8-connected neighbor set and corresponding step costs are
+\[
+\mathcal{N}_8(s)=\{(x\pm1,y),\,(x,y\pm1),\,(x\pm1,y\pm1)\},\quad
+	ext{cost}_{\text{step}}(s\to s')=\begin{cases}1, & \text{axis-aligned} \\ \sqrt{2}, & \text{diagonal}\end{cases}.
+\]
+We define the cumulative path cost $g$ by augmenting the step cost with two penalties:
+\[
+g(s') \leftarrow g(s) + \underbrace{\text{cost}_{\text{step}}(s\to s')}_{\text{motion}} + \underbrace{\frac{w_{\text{obs}}}{d(s')+1}}_{\text{safety}} + \underbrace{w_{\text{turn}}\,\mathbf{1}[\,\text{dir}(s\to s')\ne\text{dir}(\text{parent}(s)\to s)\,]}_{\text{turning}},
+\]
+where $d(s')$ is the EDT distance (in cells) from $s'$ to the nearest obstacle; $w_{\text{obs}}$ and $w_{\text{turn}}$ are non-negative weights; and $\mathbf{1}[\cdot]$ is the indicator function. Optionally, a safety buffer can be enforced: states with $d(s)\le d_{\min}$ are treated as non-traversable.
+
+The heuristic is the octile distance
+\[
+h(s)=(\sqrt{2}-1)\min\{|x-x_g|,|y-y_g|\}+\max\{|x-x_g|,|y-y_g|\},
+\]
+which is admissible and consistent for 8-connected motion with axis/diagonal step costs as above. We then use
+\[
+f(s)=g(s)+h(s)
+\]
+to order states in the open set. Because $h$ excludes the safety/turning additions, it remains a lower bound on the true total cost, preserving A*'s optimality with respect to the \emph{augmented} cost model.
+
+\subsection{Result Analysis}
+\paragraph{Computational time.} With a binary-heap priority queue, A* runs in $\mathcal{O}(E\log V)$ where $V$ is the number of free cells and $E\le 8V$ under 8-connectivity. In our implementation, we report wall-clock time (ms), the number of expanded nodes (states moved to closed set), and path steps (edges in the returned path). These are printed at the end of the run and can be directly cited.
+
+\paragraph{Safety.} The EDT-based safety term penalizes cells close to obstacles and can strictly forbid traversal within a configurable safety buffer. Compared to baseline A*, the improved planner keeps a larger clearance from obstacles, reducing collision risk under map uncertainties.
+
+\paragraph{Optimality.} The heuristic (octile) is admissible/consistent for the geometric part, and penalties are added only to $g$, not to $h$. Therefore, the first time the goal is popped from the open set, the path is optimal \emph{with respect to the augmented cost} (motion + safety + turning). Note this objective differs from the baseline A*'s ``shortest number of steps'' objective.
+
+\paragraph{Comparison with baseline A*.} We summarize representative metrics below. The baseline numbers are measured from Task~1; the improved A* numbers are to be filled from the console output of Task~2 on the same map and start/goal.
+\begin{center}
+\begin{tabular}{l r r r r}
+	oprule
+Algorithm & Time (ms) & Expanded nodes & Path steps & Min obstacle dist (cells) \\
+\midrule
+Baseline A* (4-connected) & 58.70 & 6176 & 180 & -- \\
+Improved A* (8-connected) & \textit{[fill]} & \textit{[fill]} & \textit{[fill]} & \textit{[fill]} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Typical outcomes: the improved A* often reports fewer turns and larger clearance, with path steps that may be comparable or slightly different (due to diagonals and penalties). Runtime and expansions can increase moderately because of the richer neighbor set and extra cost terms, but remain practical on a 120\,$\times$\,120 grid.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.62\linewidth]{Figures/Task_2.png}
+	\caption{Improved A* path on the 120\,$\times$\,120 map (Task~2).}
+	\label{fig:task2}
+\end{figure}
+

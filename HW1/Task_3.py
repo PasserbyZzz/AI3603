@@ -73,3 +73,4 @@ if __name__ == '__main__':
     plt.grid(True)
     plt.axis("equal")
     plt.show()
+    # plt.savefig('HW1/Figures/Task_3.png', bbox_inches='tight')

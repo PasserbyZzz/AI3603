@@ -10,11 +10,11 @@ MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '3-map/map.n
 
 from heapdict import heapdict
 
-def _manhattan_distance(a, b):
+def manhattan_distance(a, b):
     # 启发式函数h，计算曼哈顿距离
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-def _reconstruct_path(parent, current):
+def reconstruct_path(parent, current):
     # 重建路径
     path = [current]
     while current in parent:
@@ -42,8 +42,9 @@ def A_star(world_map, start_pos, goal_pos):
 
     ### START CODE HERE ###
     
-    t0 = time.perf_counter() # 统计运行时间与展开节点数
+    t0 = time.perf_counter() # 统计运行时间
     expansions = 0  # 统计被加入closed_set的节点数量
+
     max_x, max_y = world_map.shape
     start = tuple(start_pos)
     goal = tuple(goal_pos)
@@ -54,13 +55,12 @@ def A_star(world_map, start_pos, goal_pos):
 
     if not _in_bounds(start) or not _in_bounds(goal):
         raise ValueError("Start or goal position is out of map bounds.")
-
     if world_map[start[0]][start[1]] == 1 or world_map[goal[0]][goal[1]] == 1:
         raise ValueError("Start or goal position is occupied by an obstacle.")
 
     # 初始化open_set和closed_set
     open_set = heapdict()
-    open_set[start] = (_manhattan_distance(start, goal), 0) # 起始点的f值即为h值
+    open_set[start] = (manhattan_distance(start, goal), 0) # 起始点的f值即为h值
 
     closed_set = set()
 
@@ -83,7 +83,7 @@ def A_star(world_map, start_pos, goal_pos):
 
         # 如果 current == goal，回溯起点到终点的输出路径
         if current == goal:
-            path = _reconstruct_path(parent, current)
+            path = reconstruct_path(parent, current)
             t1 = time.perf_counter()
             elapsed_ms = (t1 - t0) * 1000.0
             steps = max(len(path) - 1, 0) 
@@ -109,7 +109,7 @@ def A_star(world_map, start_pos, goal_pos):
             if tentative_g < g_score.get(neighbor, np.inf):
                 parent[neighbor] = current # 更新前驱节点
                 g_score[neighbor] = tentative_g # 更新 g 值
-                f_score = tentative_g + _manhattan_distance(neighbor, goal) # 计算 f 值
+                f_score = tentative_g + manhattan_distance(neighbor, goal) # 计算 f 值
                 open_set[neighbor] = (f_score, counter) # 加入 open_set
                 counter += 1
 
@@ -158,5 +158,5 @@ if __name__ == '__main__':
     plt.plot(obstacles_x, obstacles_y, ".k")
     plt.grid(True)
     plt.axis("equal")
-    # plt.show()
-    plt.savefig('HW1/Figures/Task_1.png', bbox_inches='tight')
+    plt.show()
+    # plt.savefig('HW1/Figures/Task_1.png', bbox_inches='tight')
