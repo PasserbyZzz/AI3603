@@ -2,15 +2,53 @@
 \section{Task 2: Improved A* with 8-Connectivity, Obstacle-Aware and Turning Costs}
 
 \subsection{Method}
-We extend the baseline A* to incorporate three practical considerations: (i) 8-connected motion (diagonals allowed), (ii) safety awareness via obstacle distance, and (iii) path smoothness via steering (turning) costs. The open set is implemented with \texttt{heapdict} to support efficient priority updates; we use an octile-distance heuristic that matches the 8-connected motion model.
+We implement an \textbf{improved A*} that augments the baseline with 8-connected motion, obstacle-aware safety costs via an Euclidean Distance Transform (EDT), and turning costs for smoother paths. The algorithm follows the standard A* skeleton but modifies the path cost accumulation $g$ while keeping the heuristic purely geometric.
 
-Concretely, the planner:
+\paragraph{Data structures.}
 \begin{itemize}
-	\item Allows moves in 8 directions: up, down, left, right, and the four diagonals; the step cost is 1 for axis-aligned moves and $\sqrt{2}$ for diagonals.
-	\item Uses an Euclidean Distance Transform (EDT) to compute the distance $d(s)$ from each free cell $s$ to the nearest obstacle; we add a safety cost that grows when $d(s)$ is small.
-	\item Adds a small turning cost whenever the motion direction changes between two consecutive steps, encouraging smoother paths with fewer sharp turns.
-	\item Keeps the heuristic purely geometric (octile distance), excluding the extra safety/smoothness costs from $h$ to preserve admissibility and consistency.
+	\item \textbf{open\_set}: a priority queue keyed by $f(s)=g(s)+h(s)$, implemented with \texttt{heapdict} (supports decrease-key updates efficiently).
+	\item \textbf{closed\_set}: a hash set of expanded states whose current $g$ is final.
+	\item \textbf{parent}: a hash map storing the best predecessor of each discovered state for path reconstruction.
+	\item \textbf{$g$-score}: a hash map storing the current best-known path cost from start to each discovered state.
+	\item \textbf{last\_dir}: a hash map storing the incoming motion direction for each state (used to compute turning costs).
+	\item \textbf{EDT distance map} $d(\cdot)$: computed once on the free-space mask; gives the distance from any free cell to the nearest obstacle.
 \end{itemize}
+
+\paragraph{Neighbor model and costs.}
+We use the 8-connected set $\mathcal{N}_8(s)$ with unit cost for axis-aligned moves and $\sqrt{2}$ for diagonals. The cumulative cost update augments motion with safety and turning terms:
+\[
+g(s') \leftarrow g(s) + \underbrace{\text{cost}_{\text{step}}(s\to s')}_{\text{motion}} + \underbrace{\frac{w_{\text{obs}}}{d(s')+1}}_{\text{safety}} + \underbrace{w_{\text{turn}}\,\mathbf{1}[\,\text{dir}(s\to s')\ne\text{dir}(\text{parent}(s)\to s)\,]}_{\text{turning}},
+\]
+and we optionally enforce a safety buffer: cells with $d(s')\le d_{\min}$ are treated as non-traversable.
+
+\paragraph{Heuristic.}
+We use the octile distance
+\[
+h(s)=(\sqrt{2}-1)\min\{|x-x_g|,|y-y_g|\}+\max\{|x-x_g|,|y-y_g|\},
+\]
+which is admissible/consistent for 8-connected motion with the above step costs. The safety/turning additions are excluded from $h$, so $h$ remains a lower bound and A* retains optimality with respect to the \emph{augmented} objective.
+
+\paragraph{Algorithm.}
+\begin{enumerate}
+	\item \textbf{Initialization:} compute the EDT distance map on the free-space mask; set $g(s_s)=0$ and $\texttt{last\_dir}[s_s]=\text{None}$; compute $f(s_s)=h(s_s)$ and insert $s_s$ into \texttt{open\_set} keyed by $f$.
+	\item \textbf{Main loop:} while \texttt{open\_set} is not empty:
+	\begin{enumerate}
+		\item Pop the state $s$ with minimal $f(s)$ from \texttt{open\_set}.
+		\item If $s=s_g$, terminate and reconstruct the path by following \texttt{parent} backwards from $s_g$ to $s_s$.
+		\item Insert $s$ into \texttt{closed\_set}.
+		\item For each neighbor $s'\in\mathcal{N}_8(s)$ that is in bounds and not an obstacle:
+		\begin{enumerate}
+			\item If $d(s')\le d_{\min}$, skip $s'$ (treated as unsafe).
+			\item Let $\text{cost}_{\text{step}}=1$ for axis-aligned moves and $\sqrt{2}$ for diagonals.
+			\item Let $\text{cost}_{\text{safety}}=\frac{w_{\text{obs}}}{d(s')+1}$.
+			\item Let $\text{cost}_{\text{turn}}=w_{\text{turn}}$ if the direction from $s$ to $s'$ differs from $\texttt{last\_dir}[s]$, else $0$.
+			\item Compute $\tilde g = g(s)+\text{cost}_{\text{step}}+\text{cost}_{\text{safety}}+\text{cost}_{\text{turn}}$.
+			\item If $s'\in$ \texttt{closed\_set} and $\tilde g \ge g(s')$, continue.
+			\item If $s'$ is unseen or $\tilde g < g(s')$, set $g(s')\leftarrow \tilde g$, $f(s')\leftarrow g(s')+h(s')$, \texttt{parent}$[s']\leftarrow s$, \texttt{last\_dir}$[s']\leftarrow \text{dir}(s\to s')$, and insert/update $s'$ in \texttt{open\_set} with priority $f(s')$.
+		\end{enumerate}
+	\end{enumerate}
+	\item \textbf{Failure:} if \texttt{open\_set} becomes empty before reaching $s_g$, report that no feasible path exists.
+\end{enumerate}
 
 \subsection{Problem Formulation}
 Let the grid map be $\texttt{world\_map}\in\{0,1\}^{120\times 120}$, where 0 indicates a free cell and 1 an obstacle. The state space is
@@ -41,7 +79,7 @@ to order states in the open set. Because $h$ excludes the safety/turning additio
 \subsection{Result Analysis}
 \paragraph{Computational time.} With a binary-heap priority queue, A* runs in $\mathcal{O}(E\log V)$ where $V$ is the number of free cells and $E\le 8V$ under 8-connectivity. In our implementation, we report wall-clock time (ms), the number of expanded nodes (states moved to closed set), and path steps (edges in the returned path). These are printed at the end of the run and can be directly cited.
 
-\paragraph{Safety.} The EDT-based safety term penalizes cells close to obstacles and can strictly forbid traversal within a configurable safety buffer. Compared to baseline A*, the improved planner keeps a larger clearance from obstacles, reducing collision risk under map uncertainties.
+\paragraph{Safety.} With the introduction of $w_{\text{obs}}$ (obstacle-clearance weight) and $w_{\text{turn}}$ (turning penalty), the planner explicitly encourages paths with fewer direction changes and larger clearance from obstacles; in our run, the final path contains only \textbf{7 turns}. Beyond the soft penalty, we also enforce a \emph{hard} safety buffer by setting $d_{\min}=\mathbf{3.0}$ cells, i.e., any state with $d(s)\le3.0$ is treated as non-traversable. Compared to baseline A*, this strengthens safety by both discouraging near-obstacle traversal and forbidding it within the buffer.
 
 \paragraph{Optimality.} The heuristic (octile) is admissible/consistent for the geometric part, and penalties are added only to $g$, not to $h$. Therefore, the first time the goal is popped from the open set, the path is optimal \emph{with respect to the augmented cost} (motion + safety + turning). Note this objective differs from the baseline A*'s ``shortest number of steps'' objective.
 

@@ -72,7 +72,7 @@ def Improved_A_star(world_map, start_pos, goal_pos):
     # 权重
     w_obs = 3.0 # 距障惩罚权重，惩罚贴边
     w_turn = 0.5 # 转弯惩罚权重，惩罚拐弯
-    safety_buffer = 0.0 # 安全缓冲
+    safety_buffer = 3.0 # 安全缓冲
 
     def obstacle_penalty(n):
         d = dist_map[n[0], n[1]] # 当前格到最近障碍的距离
@@ -195,5 +195,5 @@ if __name__ == '__main__':
     plt.plot(obstacles_x, obstacles_y, ".k")
     plt.grid(True)
     plt.axis("equal")
-    plt.show()
-    # plt.savefig('HW1/Figures/Task_2.png', bbox_inches='tight')
+    # plt.show()
+    plt.savefig('HW1/Figures/Task_2.png', bbox_inches='tight')
