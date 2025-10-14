@@ -7,7 +7,8 @@ MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '3-map/map.n
 
 
 ### START CODE HERE ###
-from easydubins import dubin_path
+# This code block is optional. You can define your utility function and class in this block if necessary.
+
 
 
 ###  END CODE HERE  ###
