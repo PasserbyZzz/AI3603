@@ -11,19 +11,28 @@ MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '3-map/map.n
 from easydubins.dubin_path import dubins_path, get_curve
 from heapdict import heapdict
 import math
+from scipy.ndimage import distance_transform_edt
 
 def wrap_angle(theta):
-    # wrap to [0, 2π)
+    # 将角度标准化到 [0, 2π)
     twopi = 2.0 * math.pi
     return theta % twopi
 
-def angle_to_deg(theta):
+def rad_to_deg(theta):
+    # 弧度转度，并归一到 [0, 360)
     return math.degrees(theta) % 360.0
 
 def deg_to_rad(deg):
+    # 度转弧度
     return math.radians(deg)
 
+def theta_to_bin(theta, theta_bins):
+    # theta→桶
+    b = int(round((wrap_angle(theta) / (2*math.pi)) * theta_bins)) % theta_bins
+    return b
+
 def heuristic_dubins(curr, goal, radius):
+    # 启发式函数h，计算Dubins最短路径长度，失败则退化为欧氏距离
     # curr, goal: (x,y,theta_rad)
     try:
         mode, lengths, _ = dubins_path(curr, goal, radius)
@@ -36,32 +45,33 @@ def heuristic_dubins(curr, goal, radius):
         return math.hypot(goal[0]-curr[0], goal[1]-curr[1])
 
 def in_bounds(world_map, x, y):
+    # 检查坐标是否在地图边界内
     h, w = world_map.shape
     return 0 <= x < h and 0 <= y < w
 
 def is_free(world_map, x, y):
+    # 检查坐标是否在地图内且为自由空间
     if not in_bounds(world_map, x, y):
         return False
     return world_map[int(round(x))][int(round(y))] == 0
 
-def collision_along_segment(world_map, pts):
+def collision_along_segment(world_map, pts, dist_map, safety_buffer):
+    # 碰撞检测
     # pts: list of [x,y,heading_deg] or (x,y,theta)
-    # 加入距障硬约束
-    from scipy.ndimage import distance_transform_edt
-    # 这里假设 dist_map 已在 hybrid_a_star 中计算并传入全局
-    global dist_map, safety_buffer
     for p in pts:
+        # 本身为障碍
         x = p[0]
         y = p[1]
         if not is_free(world_map, x, y):
             return True
-        # 距障硬约束
+        # 距离障碍过近
         d_obs = dist_map[int(round(x)), int(round(y))]
         if d_obs <= safety_buffer:
             return True
     return False
 
 def path_length(points):
+    # 计算路径总长度（相邻点欧氏距离累加）
     if not points or len(points) < 2:
         return 0.0
     total = 0.0
@@ -71,25 +81,37 @@ def path_length(points):
         total += math.hypot(x2-x1, y2-y1)
     return total
 
-def dubins_shortcut_smooth(world_map, path, radius, step, iterations=80, min_gap=8, seed=0):
+def dubins_shortcut_smooth(world_map, dist_map, safety_buffer, path, radius, step, iterations=80, min_gap=8, seed=0):
     """Iteratively try to replace sub-segments with Dubins connections to shorten/smooth.
     path: list of [x,y,heading_deg]
     returns: new path list of same format
     """
+    # radius： 最小转弯半径
+    # step: 规划步长（用于采样密度）
+    # iterations：尝试次数
+    # min_gap：最小间隔点数，防止过短
+
+    # 路径太短
     if not path or len(path) < min_gap + 2:
         return path
+    
     rng = np.random.default_rng(seed)
     best = list(path)
     best_len = path_length(best)
     n = len(best)
+
     for _ in range(iterations):
         if n < min_gap + 2:
             break
+
+        # 随机选取两个点 i,j (j-i >= min_gap)
         i = int(rng.integers(0, n - 1 - min_gap))
         j = int(rng.integers(i + min_gap, n - 1))
+        # 选取相应端点
         pi = best[i]
         pj = best[j]
-        # Build dubins connection between pi and pj using get_curve (degree inputs)
+
+        # 生成 Dubins 曲线采样点
         try:
             cand_mid = get_curve(pi[0], pi[1], float(pi[2]), pj[0], pj[1], float(pj[2]),
                                  radius, max_line_distance=max(0.2, step/2.0))
@@ -97,10 +119,11 @@ def dubins_shortcut_smooth(world_map, path, radius, step, iterations=80, min_gap
             continue
         if not cand_mid:
             continue
-        # collision check on candidate mid segment
-        if collision_along_segment(world_map, cand_mid):
+
+        # 逐点进行碰撞检测
+        if collision_along_segment(world_map, cand_mid, dist_map, safety_buffer):
             continue
-        # Compose new candidate full path: include exact endpoints to preserve heading anchors
+        # 无碰撞，替换原路径
         new_seg = [pi] + cand_mid + [pj]
         cand = best[:i] + new_seg + best[j+1:]
         new_len = path_length(cand)
@@ -111,28 +134,36 @@ def dubins_shortcut_smooth(world_map, path, radius, step, iterations=80, min_gap
     return best
 
 def motion_primitives(x, y, theta, step, radius):
+    # 运动原语，从当前姿态生成三种动作后继（直行、左弯、右弯）
+    # x, y, theta：当前连续位姿
+    # step：规划步长
+    # radius：最小转弯半径
     # Returns list of (nx, ny, ntheta, cost)
     actions = []
+
     # straight
     nx = x + step * math.cos(theta)
     ny = y + step * math.sin(theta)
     ntheta = wrap_angle(theta)
     actions.append((nx, ny, ntheta, step))
+
     # left arc: delta heading = + step / radius
     dth = step / radius
     th2 = wrap_angle(theta + dth)
     nx_l = x + radius * (math.sin(th2) - math.sin(theta))
     ny_l = y - radius * (math.cos(th2) - math.cos(theta))
     actions.append((nx_l, ny_l, th2, step))
+
     # right arc: delta heading = - step / radius
     th3 = wrap_angle(theta - dth)
     nx_r = x + radius * (math.sin(th3) - math.sin(theta))
     ny_r = y - radius * (math.cos(th3) - math.cos(theta))
     actions.append((nx_r, ny_r, th3, step))
+
     return actions
 
-def sample_motion(world_map, x, y, theta, nx, ny, ntheta, step_samples=5):
-    # Sample along straight or arc using linear interpolation in configuration space
+def sample_motion(x, y, nx, ny, step_samples=5):
+    # 对从当前姿态 (x,y,theta) 到后继 (nx,ny,ntheta) 的单步动作进行离散采样，生成用于碰撞检测的点集
     pts = []
     for i in range(1, step_samples+1):
         t = i / float(step_samples)
@@ -143,18 +174,21 @@ def sample_motion(world_map, x, y, theta, nx, ny, ntheta, step_samples=5):
     vis_pts = [[px, py, 0.0] for (px, py) in pts]
     return vis_pts
 
-def analytic_expand_if_possible(world_map, node, goal, radius, step):
+def analytic_expand_if_possible(world_map, dist_map, safety_buffer, node, goal, radius, step):
+    # 尝试解析扩展，若Dubins连接可行则返回路径点，否则返回None
     # node = (x,y,theta), goal=(gx,gy,gtheta)
     sx, sy, sth = node
     gx, gy, gth = goal
-    sdeg = angle_to_deg(sth)
-    gdeg = angle_to_deg(gth)
-    # step used as max_line_distance for sampling density
+    sdeg = rad_to_deg(sth)
+    gdeg = rad_to_deg(gth)
+    
+    # 从当前姿态到目标姿态尝试生成 Dubins 曲线采样点
     try:
         curve = get_curve(sx, sy, sdeg, gx, gy, gdeg, radius, max_line_distance=step/2.0)
         if not curve:
             return None
-        if collision_along_segment(world_map, curve):
+        # 逐点进行碰撞检测
+        if collision_along_segment(world_map, curve, dist_map, safety_buffer):
             return None
         return curve  # list of [x,y,heading_deg]
     except Exception:
@@ -163,58 +197,58 @@ def analytic_expand_if_possible(world_map, node, goal, radius, step):
 def hybrid_a_star(world_map, start_xy, goal_xy,
                   start_heading_deg=0.0, goal_heading_deg=0.0,
                   step=1.0, radius=5.0, theta_bins=72):
+    # Hybrid A* algorithm for path planning with non-holonomic constraints.
+    # start_xy, goal_xy: 起终点位置
+    # start_heading_deg, goal_heading_deg: 起终点朝向（度）
+    # step: 规划步长
+    # radius: 最小转弯半径
+    # theta_bins: 离散化的朝向角度数
+    
     # State: (x,y,theta_rad)
     start = (float(start_xy[0]), float(start_xy[1]), deg_to_rad(start_heading_deg))
     goal = (float(goal_xy[0]), float(goal_xy[1]), deg_to_rad(goal_heading_deg))
 
-
-    h, w = world_map.shape
+    # 检查起点、终点
     if not is_free(world_map, start[0], start[1]) or not is_free(world_map, goal[0], goal[1]):
         raise ValueError("Start or goal is in obstacle/bounds.")
 
-    # --- 距障惩罚参数 ---
-    from scipy.ndimage import distance_transform_edt
+    # 参数
     free_mask = (world_map == 0)
-    global dist_map, safety_buffer
     dist_map = distance_transform_edt(free_mask)
     w_obs = 3.0
     w_turn = 0.5
     safety_buffer = 3.0
 
-    # Closed set with discretization of theta
-    def theta_to_bin(theta):
-        b = int(round((wrap_angle(theta) / (2*math.pi)) * theta_bins)) % theta_bins
-        return b
-
-    closed = set()
+    closed_set = set()
     parents = {}
-    g_cost = {}
 
-    start_key = (int(round(start[0])), int(round(start[1])), theta_to_bin(start[2]))
-    g_cost[start_key] = 0.0
-    pq = heapdict()
-    # heuristic using dubins to fixed goal heading
+    g_score = {}
+    start_key = (int(round(start[0])), int(round(start[1])), theta_to_bin(start[2], theta_bins))
+    g_score[start_key] = 0.0
+
+    open_set = heapdict()
     f0 = heuristic_dubins(start, goal, radius)
-    pq[start_key] = f0
+    open_set[start_key] = f0
 
-    state_map = {start_key: start}  # key: (ix,iy,itheta) -> (x,y,theta)
-    last_dir = {start_key: None}    # 记录进入方向
+    state_map = {start_key: start} # key: (ix,iy,itheta) -> (x,y,theta)
+    last_dir = {start_key: None} # 记录进入方向
     expansions = 0
     best_goal_curve = None
 
-    while pq:
-        ckey, _ = pq.popitem()
+    while open_set:
+        ckey, _ = open_set.popitem()
         current = state_map[ckey]
         cx, cy, cth = current
-        if ckey in closed:
+        if ckey in closed_set:
             continue
-        closed.add(ckey)
+        closed_set.add(ckey)
         expansions += 1
 
         # goal proximity check and analytic expansion
         dist_to_goal = math.hypot(goal[0]-cx, goal[1]-cy)
         if dist_to_goal < 5.0 or expansions % 50 == 0:
-            curve = analytic_expand_if_possible(world_map, current, goal, radius, step)
+            # 若距目标近或按频率触发，则尝试解析扩展
+            curve = analytic_expand_if_possible(world_map, dist_map, safety_buffer, current, goal, radius, step)
             if curve is not None:
                 best_goal_curve = curve
                 # reconstruct path to current then append curve
@@ -223,30 +257,31 @@ def hybrid_a_star(world_map, start_xy, goal_xy,
                 tmp = ckey
                 while tmp in parents:
                     px, py, pth = parents[tmp][0]
-                    path.append([px, py, angle_to_deg(pth)])
+                    path.append([px, py, rad_to_deg(pth)])
                     tmp = parents[tmp][1]
-                path.append([start[0], start[1], angle_to_deg(start[2])])
+                path.append([start[0], start[1], rad_to_deg(start[2])])
                 path.reverse()
                 # append curve (already includes current onwards)
                 path.extend(best_goal_curve)
                 return path, expansions
 
-        # expand motion primitives
+        # 否则扩展三种动作后继（直行/左弯/右弯）
         for nx, ny, nth, cost_inc in motion_primitives(cx, cy, cth, step, radius):
             if not in_bounds(world_map, nx, ny):
                 continue
-            seg_pts = sample_motion(world_map, cx, cy, cth, nx, ny, nth, step_samples=5)
-            if collision_along_segment(world_map, seg_pts):
+            seg_pts = sample_motion(cx, cy, nx, ny, step_samples=5)
+            if collision_along_segment(world_map, seg_pts, dist_map, safety_buffer):
                 continue
-            nkey = (int(round(nx)), int(round(ny)), theta_to_bin(nth))
+            nkey = (int(round(nx)), int(round(ny)), theta_to_bin(nth, theta_bins))
 
-            # 距障惩罚
+            # 距障软惩罚
             d_obs = dist_map[int(round(nx)), int(round(ny))]
             if d_obs <= safety_buffer:
-                continue  # 视为碰撞
+                # 视为碰撞
+                continue  
             obs_cost = w_obs / (d_obs + 1.0)
 
-            # 转弯惩罚
+            # 转弯软惩罚
             prev_dir = last_dir.get(ckey, None)
             cur_dir = (nx - cx, ny - cy)
             turn_cost = 0.0
@@ -259,13 +294,14 @@ def hybrid_a_star(world_map, start_xy, goal_xy,
                     if cos_angle < 0.99:  # 夹角大于约8°
                         turn_cost = w_turn
 
-            tentative_g = g_cost[ckey] + cost_inc + obs_cost + turn_cost
-            if nkey not in g_cost or tentative_g < g_cost[nkey]:
-                g_cost[nkey] = tentative_g
+            # 计算 g 值并更新
+            tentative_g = g_score[ckey] + cost_inc + obs_cost + turn_cost
+            if nkey not in g_score or tentative_g < g_score[nkey]:
+                g_score[nkey] = tentative_g
                 parents[nkey] = ((nx, ny, nth), ckey)
                 last_dir[nkey] = cur_dir
                 hval = heuristic_dubins((nx, ny, nth), goal, radius)
-                pq[nkey] = tentative_g + hval
+                open_set[nkey] = tentative_g + hval
                 state_map[nkey] = (nx, ny, nth)
 
     # If failed, return empty
@@ -304,11 +340,15 @@ def Self_driving_path_planner(world_map, start_pos, goal_pos):
     print(f"Hybrid A* expansions: {expansions}, time: {dt:.1f} ms, path points: {len(raw_path)}")
 
     # Post smoothing with Dubins shortcut
+    free_mask = (world_map == 0)
+    dist_map = distance_transform_edt(free_mask)    
+    safety_buffer = 3.0
     if raw_path:
         pre_len = path_length(raw_path)
         t1 = time.time()
-        path = dubins_shortcut_smooth(world_map, raw_path, radius=radius, step=step,
-                                        iterations=120, min_gap=8, seed=42)
+        path = dubins_shortcut_smooth(world_map, dist_map, safety_buffer, raw_path, 
+                                      radius=radius, step=step,
+                                      iterations=120, min_gap=8, seed=42)
         dt2 = (time.time() - t1) * 1000.0
         post_len = path_length(path)
         print(f"Dubins smoothing: {pre_len:.1f} -> {post_len:.1f} (Δ {pre_len-post_len:.1f}), time: {dt2:.1f} ms")

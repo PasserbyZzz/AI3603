@@ -1,0 +1,101 @@
+\section{Task 3: Hybrid A* with Dubins Analytic Expansion}
+
+\subsection{Problem Formulation}
+
+We consider a \(120\times 120\) occupancy grid, each cell representing a \SI{1.0}{m}\,$\times$\,\SI{1.0}{m} block. The robot state is continuous and non-holonomic: \(s=(x, y, \theta)\), where \(\theta\in[0,2\pi)\) is the heading. Obstacles are encoded by \(\texttt{world\_map}\in\{0,1\}^{120\times 120}\) (1: occupied, 0: free). We assume a minimum turning radius \(R>0\) and fixed step length \(\Delta s>0\).
+
+We use three motion primitives per expansion: straight, left-arc, and right-arc. Their continuous kinematics are
+\begin{align}
+	ext{straight:}\quad & x' = x + \Delta s\cos \theta,\quad y' = y + \Delta s\sin \theta,\quad \theta' = \theta,\\
+	ext{left arc:}\quad & \Delta\theta = \frac{\Delta s}{R},\; \theta' = \theta + \Delta\theta,\\
+& x' = x + R\big(\sin\theta' - \sin\theta\big),\quad y' = y - R\big(\cos\theta' - \cos\theta\big),\\
+	ext{right arc:}\quad & \Delta\theta = \frac{\Delta s}{R},\; \theta' = \theta - \Delta\theta,\\
+& x' = x + R\big(\sin\theta' - \sin\theta\big),\quad y' = y - R\big(\cos\theta' - \cos\theta\big).
+\end{align}
+
+Let \(d(s)\) denote the Euclidean distance (in cells) from \(s\)'s position to the nearest obstacle on the Euclidean Distance Transform (EDT) computed on the free-space mask. We enforce a \emph{hard} safety buffer \(\texttt{safety\_buffer}>0\): any state with \(d(s)\le \texttt{safety\_buffer}\) is treated as non-traversable. The path cost augments the geometric step length with two soft penalties (close-to-obstacle and turning), yielding
+\begin{equation}
+g(s') \leftarrow g(s) + \underbrace{\Delta s}_{\text{geometric}} + \underbrace{\frac{w_{\text{obs}}}{d(s')+1}}_{\text{safety penalty}} + \underbrace{w_{\text{turn}}\,\mathbf{1}\big[\,\mathrm{dir}(s\to s')\ne\mathrm{dir}(\mathrm{parent}(s)\to s)\,\big]}_{\text{turning penalty}},
+\label{eq:hybrid_g}
+\end{equation}
+subject to the hard constraint \(d(s'),\; d(\text{samples on } s\to s') > \texttt{safety\_buffer}\). The indicator is 1 if the incoming direction changes.
+
+The heuristic \(h\) is the Dubins shortest-path length from the current pose to the goal pose under radius \(R\):
+\begin{equation}
+h(s) =
+\begin{cases}
+L_{\text{Dubins}}\big(s, s_g; R\big), & \text{if Dubins solves}\\
+\| (x,y) - (x_g,y_g) \|_2, & \text{otherwise (fallback)}
+\end{cases}
+\label{eq:hybrid_h}
+\end{equation}
+and the A* evaluation is \(f(s)=g(s)+h(s)\). Note that penalties appear only in \(g\), not in \(h\).
+
+\subsection{Method}
+
+\paragraph{State and discretization.} The search state is continuous \((x,y,\theta)\). For closed-set indexing, the heading is discretized into \(N_\theta=\texttt{theta\_bins}\) bins via
+\(i_\theta = \mathrm{round}\big((\mathrm{wrap}(\theta)/(2\pi))\,N_\theta\big)\), and position is rounded to the nearest cell \((i_x,i_y)\). The closed key is \((i_x,i_y,i_\theta)\).
+
+\paragraph{Motion primitives.} From \(s\) we generate three successors using the kinematics above: straight, left-arc, right-arc. For collision checking we linearly sample between \((x,y)\) and \((x',y')\) (\(N\) samples per step) and require: (i) in-bounds, (ii) free occupancy, and (iii) hard clearance \(d>\texttt{safety\_buffer}\) for all samples.
+
+\paragraph{Heuristic.} We compute \(h\) using Dubins shortest path (\texttt{easydubins.dubin\_path}); if it fails numerically, we fallback to Euclidean distance. Since \(h\) lower-bounds the geometric length and penalties are only in \(g\), the heuristic is admissible with respect to the augmented cost in \eqref{eq:hybrid_g}.
+
+\paragraph{Analytic expansion.} When (a) the current node is within a distance threshold to the goal or (b) every \(K\) expansions, we attempt an analytic connection using \texttt{easydubins.get\_curve} from the current state to the goal. If the entire curve passes occupancy and hard-clearance checks, we terminate the search and return the concatenation of the backtracked partial path and the analytic curve.
+
+\paragraph{Data structures.} We use
+\begin{itemize}
+	\item \textbf{open\_set}: priority queue (\texttt{heapdict}) keyed by \(f\);
+	\item \textbf{closed\_set}: hash set of closed keys \((i_x,i_y,i_\theta)\);
+	\item \textbf{parents}: map \((i_x,i_y,i_\theta)\mapsto(\text{state},\text{parent\_key})\) for reconstruction;
+	\item \textbf{g\_cost}: map storing the best-known \(g\) for each key;
+	\item \textbf{state\_map}: map from key to continuous state \((x,y,\theta)\);
+	\item \textbf{last\_dir}: map storing the incoming direction vector for turning penalty;
+	\item \textbf{dist\_map}: EDT on the free-space mask;
+	\item \textbf{safety\_buffer}: hard clearance threshold.
+\end{itemize}
+
+\paragraph{Overall flow.}
+\begin{enumerate}
+	\item Initialize \(\textbf{dist\_map}\), compute \(g(s_s)=0\), \(f(s_s)=h(s_s)\), push start into \textbf{open\_set}.
+	\item While \textbf{open\_set} not empty:
+	\begin{enumerate}
+		\item Pop key with minimal \(f\); if already closed, continue; else add to \textbf{closed\_set}.
+		\item If near goal or by period, try analytic expansion via \texttt{get\_curve}; if feasible, backtrack parents and return concatenated path.
+		\item Otherwise, expand motion primitives; for each successor, sample for collision and hard clearance, compute penalties and update \(g\) using \eqref{eq:hybrid_g}; set \(f=g+h\) with \(h\) from \eqref{eq:hybrid_h}; push/update in \textbf{open\_set}.
+	\end{enumerate}
+	\item If \textbf{open\_set} empties without success, report failure.
+\end{enumerate}
+
+\paragraph{Post-processing.} We optionally apply \emph{Dubins shortcut smoothing}: repeatedly select indices \(i<j\) (with a minimal gap), attempt a Dubins connection between path points \(p_i\) and \(p_j\), and replace the middle if (i) collision-free under hard clearance and (ii) reduces total length.
+
+\subsection{Result}
+
+The implemented planner returns a path as a sequence of \([x, y, \text{heading\_deg}]\) and visualizes it with arrows aligned with the local tangents. The cost update and heuristic are, respectively,
+\begin{align}
+g(s') &= g(s) + \Delta s + \frac{w_{\text{obs}}}{d(s')+1} + w_{\text{turn}}\,\mathbf{1}[\text{dir change}],\\
+h(s) &= \begin{cases}
+L_{\text{Dubins}}(s, s_g; R), & \text{if available},\\
+\| (x,y)-(x_g,y_g) \|_2, & \text{otherwise}.
+\end{cases}
+\end{align}
+Key data structures include \texttt{heapdict} (open set), \texttt{closed\_set}, \texttt{parents}, \texttt{g\_cost}, \texttt{state\_map}, \texttt{last\_dir}, and \texttt{dist\_map}. The overall flow follows the steps detailed above with periodic analytic expansion. A representative visualization is shown in Fig.~\ref{fig:task3}, where arrows indicate the feasible heading along the path.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.5\linewidth]{Figures/Task_3.png}
+	\caption{Hybrid A* path with Dubins analytic expansion (Task~3).}
+	\label{fig:task3}
+\end{figure}
+
+\subsection{Analysis}
+
+\paragraph{Safety.} The hard safety buffer \(d>\texttt{safety\_buffer}\) strictly forbids near-obstacle states and samples; the soft safety penalty further encourages larger clearance. Together they reduce collision risk at the cost of potentially longer paths.
+
+\paragraph{Optimality.} The heuristic \(h\) lower-bounds the geometric portion of the cost; since penalties are only added to \(g\), the A* evaluation \(f=g+h\) remains admissible w.r.t. the augmented cost in \eqref{eq:hybrid_g}. With heading discretization and step-size resolution, the solution is optimal under this discretized/augmented model. Analytic expansion accelerates convergence and often yields near-optimal curves.
+
+\paragraph{Efficiency.} Using \texttt{heapdict} enables efficient decrease-key operations in the open set. The Dubins heuristic focuses the search in feasible steering directions, while periodic analytic expansion can terminate early when a clear Dubins connection exists. Runtime scales with step size, heading bins, and map complexity.
+
+\paragraph{Parameter effects.} Smaller \(\Delta s\) and larger \(N_\theta\) improve fidelity but increase runtime; larger \(R\) yields smoother, wider turns; larger \(\texttt{safety\_buffer}\) improves clearance but can block narrow passages; increasing \(w_{\text{turn}}\) reduces zig-zag; increasing \(w_{\text{obs}}\) pushes paths away from obstacles. Post-smoothing iterations trade time for further length reduction.
+
+\paragraph{Visualization.} We render heading arrows using the convention \(\text{dx}=\cos(\frac{\pi}{2}-\theta_{\deg})\), \(\text{dy}=\sin(\frac{\pi}{2}-\theta_{\deg})\), where \(\theta_{\deg}\) is the stored heading in degrees from \texttt{get\_curve} or reconstructed nodes, ensuring arrows are tangent to the path.
+
