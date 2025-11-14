@@ -184,3 +184,5 @@ python evaluate_cliffwalk.py
 Then replace the placeholder image files in this LaTeX document with the produced figures (or export from matplotlib directly to \texttt{learning\_curves.png} and \texttt{final\_paths.png}).
 
 \end{document}
+
+python dqn.py --learning-rate 1e-3 --buffer-size 10000 --gamma 0.99 --target-network-frequency 500 --batch-size 128 --start-e 1.0 --end-e 0.1 --exploration-fraction 0.5 --learning-starts 10000 --train-frequency 5

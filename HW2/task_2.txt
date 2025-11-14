@@ -1,0 +1,115 @@
+% ------------------------------
+% DQN Implementation Report
+% ------------------------------
+\section{Deep Q-Network (DQN) Implementation for LunarLander-v2}
+\subsection{Overview}
+This section documents the implementation of a Deep Q-Network (DQN) agent for the OpenAI Gym environment \texttt{LunarLander-v2}. The goal is to learn a policy that controls a lander to safely reach the landing zone. The provided Python file \texttt{dqn.py} contains a minimal, fully working DQN training loop including: environment setup, neural network definition, experience replay buffer usage, target network synchronization, linear $\varepsilon$-greedy exploration schedule, and logging with TensorBoard.
+
+\subsection{Environment}
+The LunarLander-v2 state $s_t \in \mathbb{R}^8$ consists of: $(x, y)$ coordinates, $(v_x, v_y)$ linear velocities, lander angle $\theta$, angular velocity $\dot{\theta}$, and two binary contact flags for the legs. The discrete action space has four actions: do nothing, fire left orientation engine, fire main engine, fire right orientation engine. An episode terminates upon crash, successful landing, or timeout.
+
+\subsection{Algorithm Recap}
+Standard DQN approximates the optimal action-value function $Q^*(s,a)$ with a parameterized network $Q_\theta(s,a)$. It uses off-policy bootstrapping and experience replay to break correlations between sequential data and stabilize updates via a separate target network $Q_{\theta^-}$. For a batch of transitions $(s_i,a_i,r_i,s'_i,d_i)$ the temporal-difference target is:
+\begin{equation}
+ y_i = r_i + \gamma (1-d_i) \max_{a'} Q_{\theta^-}(s'_i,a').
+\end{equation}
+The loss minimized is mean squared error (MSE):
+\begin{equation}
+ \mathcal{L}(\theta) = \frac{1}{B} \sum_{i=1}^B \big( y_i - Q_\theta(s_i,a_i) \big)^2.
+\end{equation}
+After every gradient step the online network parameters $\theta$ are updated; periodically (every \texttt{target\_network\_frequency} steps) the target parameters are set $\theta^- \leftarrow \theta$.
+
+\subsection{Network Architecture}
+The Q-network defined in \texttt{QNetwork} is a Multi-Layer Perceptron (MLP):
+\begin{itemize}
+	\item Input dimension: 8 (flattened state vector).
+	\item Hidden layers: 120 units (ReLU), then 84 units (ReLU).
+	\item Output layer: 4 linear units (one per discrete action) producing $Q(s,\cdot)$.
+\end{itemize}
+This lightweight architecture is sufficient for LunarLander; deeper networks could be explored for performance gains or stability.
+
+\subsection{Exploration Schedule}
+Exploration uses $\varepsilon$-greedy action selection. $\varepsilon$ decays linearly from \texttt{start\_e} to \texttt{end\_e} over a fraction \texttt{exploration\_fraction} of total timesteps:
+\begin{equation}
+ \varepsilon_t = \max\Big( \varepsilon_{\text{start}} + (\varepsilon_{\text{end}} - \varepsilon_{\text{start}}) \frac{t}{T_{\text{decay}}},\; \varepsilon_{\text{end}} \Big).
+\end{equation}
+This maintains steady reduction of exploration rather than the rapid early drop typical of exponential decay.
+
+\subsection{Replay Buffer}
+A circular replay buffer of size \texttt{buffer\_size} stores transitions $(s,a,r,s', d, info)$ allowing uniform random sampling of batches. Off-policy sampling decorrelates data and allows reuse of past experience increasing sample efficiency.
+
+\subsection{Training Loop}
+The training loop proceeds for \texttt{total\_timesteps} interactions. Prior to \texttt{learning\_starts} only data collection occurs. Afterward, every \texttt{train\_frequency} environment steps a mini-batch of size \texttt{batch\_size} is sampled and one gradient update is performed.
+
+\begin{algorithm}[H]
+\caption{DQN Training Loop (Simplified)}
+\begin{algorithmic}[1]
+\STATE Initialize replay buffer $\mathcal{D}$, online network $Q_\theta$, target network $Q_{\theta^-} \leftarrow Q_\theta$.
+\STATE Set global step $t \leftarrow 0$.
+\STATE Reset environment to obtain initial state $s$.
+\WHILE{$t <$ total\_timesteps}
+	\STATE Compute $\varepsilon_t$ via linear schedule.
+	\STATE With probability $\varepsilon_t$ select random action $a$, else $a = \arg\max_{a'} Q_\theta(s,a')$.
+	\STATE Execute $a$, observe $(s', r, d, info)$.
+	\STATE Store $(s,a,r,s',d)$ in $\mathcal{D}$.
+	\STATE If $d$ then reset env to get new $s'$.
+	\STATE $s \leftarrow s'$; $t \leftarrow t+1$.
+	\IF{$t >$ learning\_starts \AND $t$ mod train\_frequency $=0$}
+		 \STATE Sample batch $B=\{(s_i,a_i,r_i,s'_i,d_i)\}$ from $\mathcal{D}$.
+		 \STATE $y_i \leftarrow r_i + \gamma(1-d_i) \max_{a'} Q_{\theta^-}(s'_i,a')$ (no grad).
+		 \STATE Compute loss $\mathcal{L} = \frac{1}{|B|}\sum_i (y_i - Q_\theta(s_i,a_i))^2$.
+		 \STATE Gradient step on $\mathcal{L}$ to update $\theta$.
+		 \IF{$t$ mod target\_network\_frequency $= 0$}
+				\STATE $\theta^- \leftarrow \theta$.
+		 \ENDIF
+	\ENDIF
+\ENDWHILE
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Key Implementation Choices}
+\paragraph{Seeding.} Python, NumPy, and PyTorch seeds are fixed to ensure reproducibility. cuDNN deterministic mode is enabled to reduce nondeterminism.
+\paragraph{Device Selection.} Automatically chooses CUDA if available; otherwise falls back to CPU.
+\paragraph{Target Network Frequency.} A moderate update period (500 steps) balances stability (slower updates) and responsiveness (not too slow to reflect learning progress).
+\paragraph{Loss Function.} Mean Squared Error (MSE) is used; Huber loss could improve stability by reducing sensitivity to large TD errors.
+\paragraph{Exploration Parameters.} A relatively low initial $\varepsilon$ (0.3) and short decay fraction (10\% of training horizon) bias the agent toward exploitation earlier; increasing both can improve robustness.
+
+\subsection{Hyperparameters}
+\begin{center}
+\begin{tabular}{l l}
+	oprule
+Parameter & Value \\
+\midrule
+Total Timesteps & 500{,}000 \\
+Learning Rate & $2.5\times10^{-4}$ (Adam) \\
+Replay Buffer Size & 10{,}000 \\
+Discount $\gamma$ & 0.6 \\
+Batch Size & 128 \\
+Start $\varepsilon$ & 0.3 \\
+End $\varepsilon$ & 0.05 \\
+Exploration Fraction & 0.10 \\
+Learning Starts & 10{,}000 \\
+Train Frequency & 10 steps \\
+Target Update Frequency & 500 steps \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Logging}
+TensorBoard scalars are recorded for episodic return, episode length, TD loss, and mean Q-values. These metrics enable monitoring of learning progress and diagnosing instability (e.g., diverging Q-values or plateauing returns).
+
+\subsection{Potential Improvements}
+\begin{itemize}
+	\item \textbf{Higher Discount Factor:} Increase $\gamma$ (e.g., 0.99) to value long-term rewards more strongly, typical for LunarLander.
+	\item \textbf{Huber Loss:} Replace MSE with Huber to mitigate large TD error spikes.
+	\item \textbf{Replay Buffer Warm-up Check:} Explicitly gate training until buffer contains at least one full batch for clarity.
+	\item \textbf{Gradient Clipping:} Clip norm (e.g., 10) to prevent exploding gradients.
+	\item \textbf{Double DQN:} Reduce positive bias by using online network for action selection and target network for value evaluation.
+	\item \textbf{Prioritized Replay:} Sample transitions proportionally to TD error magnitude to focus learning.
+	\item \textbf{Adaptive Exploration:} Replace linear schedule with piecewise/epsilon reset on performance stagnation.
+\end{itemize}
+
+\subsection{Conclusion}
+The implementation follows the canonical DQN pipeline with a streamlined structure suitable for educational purposes. Despite its simplicity it demonstrates stable learning given appropriate hyperparameters. Incremental enhancements (Double DQN, Huber loss, prioritized replay) can be layered atop this foundation. The provided code is clear, modular, and easily extendable for experimentation.
+
+% End of DQN report
