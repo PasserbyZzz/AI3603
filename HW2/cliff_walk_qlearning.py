@@ -24,7 +24,7 @@ np.random.seed(RANDOM_SEED)
 ##### START CODING HERE #####
 
 # construct the intelligent agent.
-agent = QLearningAgent(all_actions)
+agent = QLearningAgent(all_actions, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_min=0.1, epsilon_decay=0.995)
 
 # start training
 for episode in range(1000):
@@ -33,22 +33,26 @@ for episode in range(1000):
     # reset env
     s = env.reset()
     # render env. You can remove all render() to turn off the GUI to accelerate training.
-    env.render()
-    # agent interacts with the environment
+    # env.render()
+    # agent interacts with the environment, and collects experience
     for iter in range(500):
         # choose an action
         a = agent.choose_action(s)
+        # take action a, observe r, s'
         s_, r, isdone, info = env.step(a)
-        env.render()
+        # env.render()
         # update the episode reward
         episode_reward += r
-        print(f"{s} {a} {s_} {r} {isdone}")
-        # agent learns from experience
-        agent.learn()
+        # agent learns from experience (off-policy target)
+        agent.learn(s, a, r, s_, done=isdone)
+        # update current state to next state
         s = s_
+
+        # check if episode is done
         if isdone:
-            time.sleep(0.1)
             break
+    # Per-episode epsilon decay
+    agent.epsilon = max(agent.epsilon_min, agent.epsilon * agent.epsilon_decay)
     print('episode:', episode, 'episode_reward:', episode_reward, 'epsilon:', agent.epsilon)  
 print('\ntraining over\n')   
 
