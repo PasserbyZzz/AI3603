@@ -1,6 +1,7 @@
-gym==0.25.2
-gym[box2d]
-pygame==2.6.1
-stable-baselines3==1.2.0
-tensorboard
-imageio-ffmpeg
+gym==0.25.2                # legacy gym (kept for backward compatibility)
+gym[box2d]                 # box2d extras for LunarLander
+gymnasium[box2d]>=0.29.0   # maintained drop-in replacement; preferred
+pygame==2.6.1              # required by some box2d environments (CarRacing) and video support
+stable-baselines3==1.2.0   # replay buffer utility used
+tensorboard                # logging
+imageio-ffmpeg             # video encoding backend for RecordVideo

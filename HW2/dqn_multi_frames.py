@@ -6,6 +6,7 @@ import time
 
 import gym
 import numpy as np
+from collections import deque
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -74,13 +75,16 @@ def parse_args():
     # Training frequency in environment steps
     parser.add_argument("--train-frequency", type=int, default=10,
         help="the frequency of training")
+    # Number of consecutive observations to stack as input
+    parser.add_argument("--frame-stack", type=int, default=2,
+        help="number of consecutive observations to concatenate for each state input")
    
     args = parser.parse_args()
     # Environment id
     args.env_id = "LunarLander-v2"
     return args
 
-def make_env(env_id, seed, capture_video=False, run_name=None):
+def make_env(env_id, seed, capture_video=False, run_name=None, frame_stack: int = 1):
     """Construct the gym environment.
 
     Args:
@@ -94,7 +98,51 @@ def make_env(env_id, seed, capture_video=False, run_name=None):
     env.seed(seed)
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
+    # Optional: stack multiple consecutive observations for temporal context
+    if frame_stack and frame_stack > 1:
+        env = VectorFrameStack(env, k=frame_stack)
     return env
+
+class VectorFrameStack(gym.Wrapper):
+    """Stack last k vector observations along the last dimension.
+
+    This wrapper targets 1D Box observations and returns a concatenated
+    vector of shape (obs_dim * k,).
+    """
+    def __init__(self, env, k: int = 4):
+        super().__init__(env)
+        assert k >= 1
+        self.k = k
+        self.frames = deque(maxlen=k)
+        assert isinstance(env.observation_space, gym.spaces.Box), "VectorFrameStack expects Box observation space"
+        base_space = env.observation_space
+        assert len(base_space.shape) == 1, "VectorFrameStack expects 1D observations"
+        low = np.concatenate([base_space.low for _ in range(k)], axis=0)
+        high = np.concatenate([base_space.high for _ in range(k)], axis=0)
+        self.observation_space = gym.spaces.Box(low=low, high=high, dtype=base_space.dtype)
+
+    def reset(self):
+        obs = self.env.reset()
+        # Support possible (obs, info)
+        if isinstance(obs, tuple):
+            obs = obs[0]
+        self.frames.clear()
+        for _ in range(self.k):
+            self.frames.append(np.array(obs, dtype=self.observation_space.dtype))
+        return self._get_obs()
+
+    def step(self, action):
+        result = self.env.step(action)
+        if isinstance(result, tuple) and len(result) == 5:  # gymnasium style
+            obs, reward, terminated, truncated, info = result
+            done = terminated or truncated
+        else:  # legacy gym
+            obs, reward, done, info = result
+        self.frames.append(np.array(obs, dtype=self.observation_space.dtype))
+        return self._get_obs(), reward, done, info
+
+    def _get_obs(self):
+        return np.concatenate(list(self.frames), axis=0)
 
 class QNetwork(nn.Module):
     """A feed-forward Q-network (MLP) mapping state -> action values.
@@ -146,7 +194,7 @@ def save_model(q_network: QNetwork, global_step: int, args, run_name: str, tag: 
     }, path)
     return path
 
-def evaluate_and_record(env_id: str, q_network: QNetwork, device, run_name: str, episodes: int, video: bool = True):
+def evaluate_and_record(env_id: str, q_network: QNetwork, device, run_name: str, episodes: int, video: bool = True, frame_stack: int = 1):
     """Run greedy (epsilon=0) evaluation episodes; optionally record video.
 
     Returns a list of episodic returns for reporting.
@@ -156,6 +204,8 @@ def evaluate_and_record(env_id: str, q_network: QNetwork, device, run_name: str,
     if video:
         os.makedirs(eval_dir, exist_ok=True)
         env = gym.wrappers.RecordVideo(env, eval_dir)
+    if frame_stack and frame_stack > 1:
+        env = VectorFrameStack(env, k=frame_stack)
     returns = []
     for ep in range(episodes):
         obs = env.reset()
@@ -200,7 +250,7 @@ if __name__ == "__main__":
     Apply the same seed to the environment, action space, and observation space
     to make results reproducible across runs.
     """
-    envs = make_env(args.env_id, args.seed, capture_video=bool(args.capture_video), run_name=run_name)
+    envs = make_env(args.env_id, args.seed, capture_video=bool(args.capture_video), run_name=run_name, frame_stack=args.frame_stack)
 
     """Instantiate online and target Q-networks and the optimizer.
 
@@ -288,7 +338,7 @@ if __name__ == "__main__":
 
     # record final evaluation video
     if args.capture_video:
-        eval_returns = evaluate_and_record(args.env_id, q_network, device, run_name, episodes=args.eval_episodes, video=True)
+        eval_returns = evaluate_and_record(args.env_id, q_network, device, run_name, episodes=args.eval_episodes, video=True, frame_stack=args.frame_stack)
         print(f"Final evaluation returns: {eval_returns}")
 
     """close the env and tensorboard logger"""
