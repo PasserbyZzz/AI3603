@@ -3,7 +3,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '3-map/map.npy')
+MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'map/map.npy')
 
 
 ### START CODE HERE ###
