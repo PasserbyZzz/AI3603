@@ -1,4 +1,4 @@
-# `easydubins`
+# `pip install easydubins`
 
 ## `dubins_path(start, end, radius)`
 
