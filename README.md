@@ -58,13 +58,13 @@
     <tr>
       <td align="center">
         <img src="HW2\videos\qlearning-cliffwalk.gif" 
-             width="400" 
+             width="500" 
              alt="qlearning-cliffwalk">
         <br>
       </td>
       <td align="center">
         <img src="HW2\videos\dqn-lunarlander.gif" 
-             width="200" 
+             width="250" 
              alt="dqn-lunarlander">
         <br>
       </td>
