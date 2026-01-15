@@ -24,7 +24,7 @@
 
 ## 效果展示
 
-### 平时作业 1
+### 平时作业 1：搜索算法
 
 <p align="center">
   <table align="center">
@@ -51,7 +51,7 @@
   </table>
 </p>
 
-### 平时作业 2
+### 平时作业 2：强化学习
 
 <p align="center">
   <table align="center">
@@ -72,7 +72,7 @@
   </table>
 </p>
 
-### 平时作业 3
+### 平时作业 3：贝叶斯网络
 
 <div align="center">
   <img src="HW3\screenshots\income_effect_plot.png" 
@@ -111,5 +111,6 @@
 ## 邮箱
 
 任何疑问，欢迎邮件交流：**`passerby_zzz@sjtu.edu.cn`** !
+
 
 ## **Wish for your Star⭐!**
